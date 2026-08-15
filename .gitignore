@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+content_hash_db.json
+_RUSAK/
+_DUPLIKAT/
+
+*.log
