@@ -1,12 +1,13 @@
 # Video Duplicate Finder
 
-A Python-based tool for detecting **duplicate and visually similar videos** using perceptual hashing (pHash), video metadata, and frame comparison.
+A Python-based tool for detecting **duplicate and visually similar videos** using SHA256, video metadata, and multi-frame perceptual hashing (pHash).
 
-The tool is designed to help clean and organize large video collections by identifying similar videos and automatically moving duplicates into a separate folder while keeping the higher-quality version.
+The tool helps clean and organize large video collections by identifying similar videos and automatically moving duplicates into a dedicated folder while keeping the higher-quality version.
 
 ## ✨ Features
 
 * 🎬 Detect duplicate and visually similar videos
+* 🔐 Exact duplicate detection via **SHA256**
 * 🧠 Perceptual hashing (pHash) for visual similarity detection
 * 🎞️ Compare multiple frames from each video
 * ⏱️ Compare video duration
@@ -14,28 +15,32 @@ The tool is designed to help clean and organize large video collections by ident
 * 📊 Compare video bitrate
 * 💾 Compare file size
 * 🏆 Automatically keep the higher-quality version
-* 📁 Move duplicate videos to a dedicated folder
-* 🚨 Move corrupted or unreadable videos to a separate folder
+* 📁 Move duplicate videos to `_DUPLIKAT`
+* 🔍 Move borderline matches to `_REVIEW` for manual checking
+* 🚨 Move corrupted or unreadable videos to `_RUSAK`
 * 💾 Persistent hash database for faster subsequent scans
 * 📈 Progress tracking with `tqdm`
-* 🛡️ Non-destructive file handling — files are moved instead of deleted
+* ⚡ Multi-threaded processing (FFmpeg is already multi-threaded)
+* 🛡️ Non-destructive file handling — files are moved, never deleted
 
 ## 🔍 How It Works
 
 The tool does not rely on filenames to identify duplicates.
 
-For each video, it:
+For each video it:
 
-1. Reads the video duration using **FFprobe**.
-2. Extracts several frames from different points in the video.
-3. Generates a perceptual hash (pHash) for each extracted frame.
-4. Compares the generated hashes with previously processed videos.
-5. Checks video duration similarity.
-6. Compares video quality when a duplicate is detected.
-7. Keeps the higher-quality video.
-8. Moves the lower-quality duplicate to `_DUPLIKAT`.
+1. Reads video metadata (duration, resolution, bitrate, fps) using **FFprobe**.
+2. Computes a **SHA256** hash to detect byte-identical files instantly.
+3. Extracts 9 frames from evenly spaced points in the video.
+4. Generates a perceptual hash (pHash) for each extracted frame.
+5. Compares the resulting hashes with previously processed videos of similar duration.
+6. Uses a **Hamming distance** to compute a similarity score (0–100%).
+7. Classifies matches:
+   - Scored value is equal or above the high threshold → **duplicate**.
+   - Scored between the review and high thresholds → **review**.
+8. For duplicates, compares quality and moves the lower-quality file to `_DUPLIKAT`, keeping the better one.
 9. Moves corrupted or unreadable videos to `_RUSAK`.
-10. Stores the results in a local JSON database.
+10. Stores results in a local JSON database.
 
 ### Processing Flow
 
@@ -43,10 +48,15 @@ For each video, it:
 Video Collection
        │
        ▼
-   Read Metadata
+ Read Metadata (FFprobe)
        │
        ▼
- Extract Video Frames
+   SHA256 Check
+       │
+       ├── Byte-identical ──► Duplicate (100%)
+       │
+       ▼
+ Extract 9 Frames
        │
        ▼
  Generate pHash
@@ -54,17 +64,19 @@ Video Collection
        ▼
  Compare Similarity
        │
-       ├── Not Similar ──► Keep
+       ├── < review threshold ──► Keep
+       │
+       ├── review..high ──► _REVIEW
        │
        ▼
-     Duplicate
+   Duplicate (≥ high threshold)
        │
        ▼
  Compare Quality
        │
-       ├── Higher Quality ──► Keep
+       ├── Better / Equal ──► Keep
        │
-       └── Lower Quality ───► _DUPLIKAT
+       └── Worse ───────────► _DUPLIKAT
 ```
 
 ## 🎥 Supported Video Formats
@@ -76,8 +88,17 @@ The default configuration supports:
 * `.avi`
 * `.mov`
 * `.wmv`
+* `.flv`
+* `.webm`
+* `.m4v`
+* `.ts`
+* `.mts`
+* `.m2ts`
+* `.3gp`
+* `.mpeg`
+* `.mpg`
 
-Additional formats can be added by modifying `VIDEO_EXT` in the Python script.
+Additional formats can be added by modifying `VIDEO_EXTENSIONS` in the script.
 
 ## 🛠️ Requirements
 
@@ -86,8 +107,6 @@ Additional formats can be added by modifying `VIDEO_EXT` in the Python script.
 Python **3.9 or newer** is recommended.
 
 ### Python Packages
-
-Install the required packages:
 
 ```bash
 pip install -r requirements.txt
@@ -103,64 +122,65 @@ tqdm
 
 ### FFmpeg
 
-This project requires **FFmpeg** and **FFprobe**.
+This project requires **FFmpeg** and **FFprobe** available in your `PATH`.
 
-Verify that they are available from your terminal:
+Verify:
 
 ```bash
 ffmpeg -version
-```
-
-```bash
 ffprobe -version
 ```
-
-If the commands are not recognized, install FFmpeg and add its `bin` directory to your system `PATH`.
 
 ## 🚀 Installation
 
-Clone the repository:
-
 ```bash
-git clone https://github.com/USERNAME/Video-Duplicate-Finder.git
-```
-
-Navigate to the project directory:
-
-```bash
+git clone https://github.com/hilalalhm/Video-Duplicate-Finder.git
 cd Video-Duplicate-Finder
-```
-
-Install Python dependencies:
-
-```bash
 pip install -r requirements.txt
 ```
 
-Make sure FFmpeg and FFprobe are available:
-
-```bash
-ffmpeg -version
-ffprobe -version
-```
+Make sure FFmpeg and FFprobe are available (see above).
 
 ## ▶️ Usage
 
-Place the script inside the directory containing the videos you want to scan.
-
-Run:
+Place the script inside the directory containing the videos you want to scan, then run:
 
 ```bash
-python video_duplicate_finder.py
+python dupe.py
 ```
 
-The script will automatically scan the directory and its subdirectories.
+The script scans the directory and all subdirectories.
 
-Example:
+> ⚠️ **The default mode is `EXECUTE`.** Files are actually moved. Run a report first with `--dry-run` and always keep a backup of important collections.
+
+### CLI Options
+
+| Option                  | Description                                                        | Default |
+| ----------------------- | ------------------------------------------------------------------ | ------- |
+| `--dry-run`             | Only report, do not move any file.                                 | off     |
+| `--workers N`           | Number of worker threads for hashing.                              | min(4, CPU) |
+| `--threshold PCT`       | Similarity (%) for automatic duplicate.                            | 92.0    |
+| `--review-threshold PCT`| Similarity (%) to enter the review bucket.                         | 82.0    |
+| `--no-review-move`      | Do not move borderline files to `_REVIEW`.                         | off     |
+| `--no-color`            | Disable colored terminal output.                                   | off     |
+
+Examples:
+
+```bash
+# Report only (no files moved)
+python dupe.py --dry-run
+
+# Execute with more workers and stricter threshold
+python dupe.py --workers 8 --threshold 95
+```
+
+### Example Folder Layout
+
+Before:
 
 ```text
 Video-Duplicate-Finder/
-├── video_duplicate_finder.py
+├── dupe.py
 ├── video1.mp4
 ├── video2.mp4
 ├── videos/
@@ -169,94 +189,84 @@ Video-Duplicate-Finder/
 └── ...
 ```
 
-After processing, duplicate and corrupted files will be moved into dedicated folders:
+After processing:
 
 ```text
 Video-Duplicate-Finder/
-├── video_duplicate_finder.py
+├── dupe.py
 ├── video1.mp4
 ├── videos/
 │   └── video3.mkv
 ├── _DUPLIKAT/
 │   └── video2.mp4
-└── _RUSAK/
-    └── corrupted_video.mp4
+├── _RUSAK/
+│   └── corrupted_video.mp4
+└── _REVIEW/
+    └── borderline_video.mp4
 ```
 
 ## ⚙️ Configuration
 
 The main configuration options are located at the beginning of the script.
 
-### Similarity Threshold
+### Similarity Thresholds
 
 ```python
-THRESHOLD = 18
+HIGH_SIMILARITY = 92.0
+REVIEW_SIMILARITY = 82.0
 ```
 
-This value controls how much perceptual hash difference is allowed between videos.
+* `>= HIGH_SIMILARITY` → treated as a duplicate automatically.
+* `>= REVIEW_SIMILARITY` but below the high threshold → moved to `_REVIEW`.
+* Below the review threshold → kept.
 
-A lower value means stricter similarity detection.
-
-A higher value allows more visual variation.
+Percentages are computed from the combined Hamming distance across all sampled frames (each pHash contributes 0–256 bits of distance).
 
 ### Duration Tolerance
 
 ```python
-DURATION_TOLERANCE = 2
+DURATION_TOLERANCE = 2.0
 ```
 
-This defines the maximum allowed duration difference in seconds when comparing videos.
+Maximum allowed duration difference (in seconds) between two videos that may be compared.
 
 For example:
 
 ```text
 Video A: 120 seconds
-Video B: 121 seconds
+Video B: 121 seconds   → candidate for comparison
+Video C: 125 seconds   → not compared with A/B
 ```
 
-These videos can still be considered similar.
+### Frame Sampling
 
-However:
-
-```text
-Video A: 120 seconds
-Video B: 125 seconds
+```python
+FRAME_POINTS = 9
+PHASH_HASH_SIZE = 16
 ```
 
-will not pass the default duration check.
+Videos shorter than 5 seconds are skipped (no meaningful sampling).
 
 ## 🏆 Quality Comparison
 
-When two videos are considered duplicates, the tool compares their quality.
+When two videos are considered duplicates, the tool compares quality with this priority:
 
-The comparison priority is:
-
-1. **Resolution**
+1. **Resolution** (width × height)
 2. **Bitrate**
-3. **File size**
+3. **FPS**
+4. **File size**
 
 Example:
 
 ```text
-Video A
-1920 × 1080
-8 Mbps
-500 MB
-
-Video B
-1280 × 720
-4 Mbps
-300 MB
-```
-
+Video A: 1920×1080 | 8 Mbps | 500 MB
+Video B: 1280×720  | 4 Mbps | 300 MB
 Result:
-
-```text
-KEEP       → Video A
-DUPLICATE  → Video B
+  KEEP → Video A
+  MOVE → Video B
 ```
 
-This allows the tool to automatically retain the better-quality version instead of simply keeping whichever file was scanned first.
+If qualities are exactly equal, the file whose path sorts first lexicographically is kept — the result is deterministic and stable across runs.
 
 ## 💾 Hash Database
 
@@ -266,101 +276,58 @@ The tool maintains a local JSON database:
 content_hash_db.json
 ```
 
-The database stores information such as:
-
-* Video path
-* Perceptual hash
-* Duration
-* Resolution
-* Bitrate
-* File size
-
-This allows previously processed videos to be skipped during future scans.
-
-The database is intentionally excluded from Git using `.gitignore`.
+It stores video path, SHA256, perceptual hash, duration, resolution, bitrate, fps, and file size — so unchanged files are skipped on subsequent scans (verified via size + mtime, with a content check via SHA256 when only the timestamp changed). The database (and result folders) are excluded from Git via `.gitignore`.
 
 ## 🛡️ Safe File Handling
 
-The tool does **not permanently delete files**.
+The tool **does not permanently delete files**:
 
-Duplicate videos are moved to:
+* Duplicates → `_DUPLIKAT/`
+* Corrupted / unreadable → `_RUSAK/`
+* Borderline visual matches → `_REVIEW/`
 
-```text
-_DUPLIKAT/
-```
-
-Corrupted or unreadable videos are moved to:
-
-```text
-_RUSAK/
-```
-
-This makes it possible to manually review the results before permanently deleting anything.
+Review those folders before deleting anything manually.
 
 ## ⚠️ Important Notes
 
-Always create a backup before running the tool on an important video collection.
-
-Perceptual hashing detects **visual similarity**, not binary file equality.
-
-Therefore, videos with different:
-
-* resolutions
-* bitrates
-* codecs
-* containers
-* encodings
-
-may still be identified as duplicates if their visual content is sufficiently similar.
-
-Likewise, videos with significant edits, cropping, overlays, different intros/outros, or substantial frame changes may not be detected as duplicates.
+* Always create a backup before running the tool on an important collection.
+* Default mode is **EXECUTE** — use `--dry-run` first to preview the results.
+* Perceptual hashing detects **visual similarity**, not binary equality. Videos with different resolution, bitrate, codec, container, or encoding may still be flagged as duplicates if their visual content is similar enough.
+* Videos with significant edits, cropping, overlays, or different intros/outros may not be detected — even if related.
+* Extraction failures (e.g., codec ffmpeg cannot decode) are classified as corrupted; verify `_RUSAK/` contents before discarding them.
 
 ## 📁 Project Structure
 
 ```text
 Video-Duplicate-Finder/
 │
-├── video_duplicate_finder.py
+├── dupe.py
 ├── requirements.txt
 ├── README.md
 ├── .gitignore
 │
 ├── _DUPLIKAT/
-│   └── ...
-│
 ├── _RUSAK/
-│   └── ...
+├── _REVIEW/
 │
 └── content_hash_db.json
 ```
 
-The `_DUPLIKAT`, `_RUSAK`, and `content_hash_db.json` directories/files are generated during runtime and should not be committed to the repository.
+The `_DUPLIKAT`, `_RUSAK`, `_REVIEW` folders and `content_hash_db.json` are generated at runtime and are not committed.
 
 ## 📦 Technologies
 
-* **Python**
-* **FFmpeg**
-* **FFprobe**
-* **Pillow**
-* **ImageHash**
-* **tqdm**
+**Python** · **FFmpeg** · **FFprobe** · **Pillow** · **ImageHash** · **tqdm**
 
 ## 🔮 Possible Improvements
 
-Future improvements may include:
-
-* Multi-threaded or multiprocessing video processing
-* Faster similarity search for large video collections
-* Exact file hashing before perceptual hashing
-* More advanced video fingerprinting
+* Faster similarity search for very large collections
+* Group-based duplicate resolution (keep only the global best among 3+ copies)
+* More robust corruption classification
 * GPU-accelerated frame extraction
-* Automatic backup and restore functionality
-* Detailed scan reports
-* CSV/JSON export of duplicate groups
+* CSV/JSON report export
 * Web-based interface
-* Support for additional video formats
 
 ## 📄 License
 
-This project is licensed under the **MIT License**.
-# Video-Duplicate-Finder
+MIT License.

@@ -103,9 +103,9 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--execute",
+        "--dry-run",
         action="store_true",
-        help="Benar-benar memindahkan file. Tanpa ini script hanya DRY RUN.",
+        help="Hanya laporan, tidak memindahkan file. Tanpa ini file langsung dipindahkan.",
     )
 
     parser.add_argument(
@@ -656,11 +656,31 @@ def quality_score(info):
     )
 
 
-def is_better_quality(info1, info2):
+def is_better_quality(
+    info1,
+    info2,
+    path1=None,
+    path2=None,
+):
+    if not info1:
+        return False
+
     if not info2:
         return True
 
-    return quality_score(info1) > quality_score(info2)
+    score1 = quality_score(info1)
+    score2 = quality_score(info2)
+
+    if score1 != score2:
+        return score1 > score2
+
+    # Kualitas identik: pertahankan yang path-nya lebih kecil
+    # secara leksikografis agar hasil tidak bergantung pada
+    # urutan pemrosesan / isi dictionary.
+    if path1 is not None and path2 is not None:
+        return path1 < path2
+
+    return True
 
 
 # ============================================================
@@ -717,6 +737,24 @@ def get_cached_record(db, video_path):
             and record.get("info")
         ):
             return record
+
+        # Ukuran sama tapi mtime berubah (misal touch/copy):
+        # cek konten via SHA256. Jika identik, pakai ulang record
+        # agar tidak perlu ekstraksi frame ulang.
+        if (
+            old_size == current_size
+            and record.get("sha256")
+            and record.get("hash")
+            and record.get("info")
+        ):
+            sha = calculate_sha256(path)
+
+            if sha and sha == record["sha256"]:
+                updated = dict(record)
+                updated["size"] = current_size
+                updated["mtime"] = current_mtime
+
+                return updated
 
     except Exception:
         return None
@@ -923,10 +961,12 @@ def get_candidate_paths(
     candidates = set()
 
     # Cek bucket sekitar karena toleransi durasi.
-    for nearby_bucket in (
-        bucket - 1,
-        bucket,
-        bucket + 1,
+    # Window ±2 menutup edge case banker's rounding
+    # (misal 101.0 s dan 103.0 s beda 2 bucket penuh);
+    # kelebihan kandidat nanti difilter oleh duration_is_candidate.
+    for nearby_bucket in range(
+        bucket - 2,
+        bucket + 3,
     ):
         for path in duration_index.get(
             nearby_bucket,
@@ -1181,7 +1221,7 @@ def main():
 
         sys.exit(1)
 
-    execute_mode = args.execute
+    execute_mode = not args.dry_run
 
     print()
     print(
@@ -1219,13 +1259,13 @@ def main():
         + (
             color(
                 "EXECUTE",
-                Colors.RED,
+                Colors.GREEN,
                 colors_enabled,
             )
             if execute_mode
             else color(
                 "DRY RUN",
-                Colors.GREEN,
+                Colors.RED,
                 colors_enabled,
             )
         )
@@ -1382,12 +1422,17 @@ def main():
 
                 continue
 
+            db_entry = db.get(video_path, {})
+
             if (
-                video_path in db
-                and db[video_path].get("mtime")
+                db_entry.get("mtime")
                 == record.get("mtime")
-                and db[video_path].get("size")
+                and db_entry.get("size")
                 == record.get("size")
+            ) or (
+                db_entry.get("sha256")
+                and db_entry.get("sha256")
+                == record.get("sha256")
             ):
                 cached_records += 1
 
@@ -1691,6 +1736,8 @@ def main():
         if is_better_quality(
             current_info,
             existing_info,
+            current_path,
+            existing_path,
         ):
             keep_path = current_path
             move_path = existing_path
@@ -1932,19 +1979,20 @@ def main():
         print(
             color(
                 "DRY RUN: tidak ada file yang dipindahkan.",
-                Colors.GREEN,
+                Colors.YELLOW,
                 colors_enabled,
             )
         )
 
         print()
         print(
-            "Jika hasilnya sudah sesuai, jalankan:"
+            "Jalankan tanpa --dry-run untuk "
+            "langsung memindahkan file:"
         )
 
         print()
         print(
-            "    python video_duplicate_finder.py --execute"
+            "    python dupe.py"
         )
 
     print()
